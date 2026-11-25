@@ -1,0 +1,40 @@
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+:root {
+  font-family: 'Inter', Arial, sans-serif;
+  color: #182231;
+  background: #f5f6f8;
+
+  --nx-navy: #131921;
+  --nx-secondary: #232f3e;
+  --nx-gold: #d9a441;
+  --nx-text: #182231;
+  --nx-muted: #64748b;
+  --nx-border: #e5e9ef;
+  --nx-surface: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button, input {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--nx-gold);
+  outline-offset: 3px;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}

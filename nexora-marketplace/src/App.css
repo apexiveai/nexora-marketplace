@@ -1,0 +1,49 @@
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.placeholder-page {
+  flex: 1;
+  max-width: 1200px;
+  width: 90%;
+  margin: 60px auto;
+}
+
+.placeholder-page button {
+  padding: 12px 18px;
+  background: #131921;
+  color: white;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.app-footer {
+  min-height: 75px;
+  padding: 20px 5%;
+  background: #131921;
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  font-size: 11px;
+}
+
+.app-footer strong {
+  font-size: 18px;
+  color: #d9a441;
+}
+
+.app-footer span {
+  color: #cbd5e1;
+}
+
+@media (max-width: 600px) {
+  .app-footer {
+    flex-wrap: wrap;
+  }
+}
