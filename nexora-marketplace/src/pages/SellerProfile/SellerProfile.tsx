@@ -1,663 +1,681 @@
-import { useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { DragEvent, FormEvent } from "react";
 import {
-  Store,
-  Building2,
+  Check,
+  ImagePlus,
   MapPin,
+  Play,
+  Plus,
   ShieldCheck,
-  Globe,
-  Camera,
+  Trash2,
   Upload,
-  Save,
-  ChevronRight,
-  FileText,
-  UserRound,
+  X,
 } from "lucide-react";
 import "./SellerProfile.css";
 
-type Tab =
-  | "general"
-  | "store"
-  | "business"
-  | "address"
-  | "verification"
-  | "localization";
+type RequestStatus = "New" | "Quoted" | "Won";
 
-interface ProfileForm {
-  storeName: string;
-  storeSlug: string;
-  description: string;
-  email: string;
-  phone: string;
-  website: string;
-  legalName: string;
-  businessType: string;
-  registrationNumber: string;
-  country: string;
-  city: string;
-  address: string;
-  postalCode: string;
-  currency: string;
-  language: string;
+interface SellerProfileData {
+  name: string;
+  location: string;
+  categories: string;
+  summary: string;
 }
 
-const initialForm: ProfileForm = {
-  storeName: "",
-  storeSlug: "",
-  description: "",
-  email: "",
-  phone: "",
-  website: "",
-  legalName: "",
-  businessType: "",
-  registrationNumber: "",
-  country: "",
-  city: "",
-  address: "",
-  postalCode: "",
-  currency: "USD",
-  language: "English",
+interface SellerPhoto {
+  id: string;
+  caption: string;
+  url: string;
+}
+
+interface SellerVideo {
+  id: string;
+  title: string;
+  videoId: string;
+}
+
+interface BuyerRequest {
+  id: string;
+  buyer: string;
+  details: string;
+  amount: number;
+  status: RequestStatus;
+}
+
+const requestStatuses: RequestStatus[] = ["New", "Quoted", "Won"];
+const maxPhotoBytes = 5 * 1024 * 1024;
+const initialProfile: SellerProfileData = {
+  name: "",
+  location: "",
+  categories: "",
+  summary: "",
 };
 
-const tabs = [
-  { id: "general", label: "General Profile", icon: UserRound },
-  { id: "store", label: "Store Identity", icon: Store },
-  { id: "business", label: "Business Information", icon: Building2 },
-  { id: "address", label: "Business Address", icon: MapPin },
-  { id: "verification", label: "Verification Center", icon: ShieldCheck },
-  { id: "localization", label: "Localization", icon: Globe },
-] as const;
+function getYouTubeId(value: string) {
+  const text = value.trim();
+  if (/^[\w-]{11}$/.test(text)) return text;
+  if (!text) return null;
+
+  try {
+    const url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const host = url.hostname.replace(/^(www\.|m\.)/i, "").toLowerCase();
+    const parts = url.pathname.split("/").filter(Boolean);
+    let id: string | null = null;
+
+    if (host === "youtu.be") {
+      id = parts[0] ?? null;
+    } else if (host === "youtube.com" || host === "youtube-nocookie.com") {
+      id = url.searchParams.get("v");
+      if (!id && parts.length > 1 && ["embed", "shorts", "live", "v"].includes(parts[0])) {
+        id = parts[1];
+      }
+    }
+
+    return id && /^[\w-]{11}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatMoney(amount: number) {
+  return `$${amount.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
 
 export default function SellerProfile() {
-  const [activeTab, setActiveTab] = useState<Tab>("general");
-  const [form, setForm] = useState<ProfileForm>(initialForm);
-  const [logoPreview, setLogoPreview] = useState("");
-  const [bannerPreview, setBannerPreview] = useState("");
-  const [, setLogoFile] = useState<File | null>(null);
-  const [, setBannerFile] = useState<File | null>(null);
-  const [documents, setDocuments] = useState<File[]>([]);
-  const [message, setMessage] = useState("");
+  const [profile, setProfile] = useState(initialProfile);
+  const [photos, setPhotos] = useState<SellerPhoto[]>([]);
+  const [videos, setVideos] = useState<SellerVideo[]>([]);
+  const [requests, setRequests] = useState<BuyerRequest[]>([]);
+  const [photoCaption, setPhotoCaption] = useState("");
+  const [videoTitle, setVideoTitle] = useState("");
+  const [videoUrl, setVideoUrl] = useState("");
+  const [buyer, setBuyer] = useState("");
+  const [requestDetails, setRequestDetails] = useState("");
+  const [budget, setBudget] = useState("1500");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [photoFeedback, setPhotoFeedback] = useState("");
+  const [videoFeedback, setVideoFeedback] = useState("");
+  const [toast, setToast] = useState("");
+  const photoUrls = useRef(new Set<string>());
+  const photoInput = useRef<HTMLInputElement>(null);
+
+  useEffect(
+    () => () => {
+      photoUrls.current.forEach((url) => URL.revokeObjectURL(url));
+      photoUrls.current.clear();
+    },
+    [],
+  );
 
   useEffect(() => {
-    return () => {
-      if (logoPreview) URL.revokeObjectURL(logoPreview);
-      if (bannerPreview) URL.revokeObjectURL(bannerPreview);
-    };
-  }, [logoPreview, bannerPreview]);
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
-  function updateField(
-    field: keyof ProfileForm,
-    value: string
-  ) {
-    setForm((previous) => ({
-      ...previous,
-      [field]: value,
-    }));
-    setMessage("");
+  useEffect(() => {
+    if (!modalOpen) return;
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setModalOpen(false);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [modalOpen]);
+
+  function updateProfile(field: keyof SellerProfileData, value: string) {
+    setProfile((current) => ({ ...current, [field]: value }));
   }
 
-  function handleImage(
-    file: File | undefined,
-    type: "logo" | "banner"
-  ) {
-    if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      setMessage("Please select a valid image file.");
-      return;
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      setMessage("Image size must not exceed 5 MB.");
-      return;
-    }
-
-    const url = URL.createObjectURL(file);
-
-    if (type === "logo") {
-      setLogoPreview((previous) => {
-        if (previous) URL.revokeObjectURL(previous);
-        return url;
-      });
-      setLogoFile(file);
-    } else {
-      setBannerPreview((previous) => {
-        if (previous) URL.revokeObjectURL(previous);
-        return url;
-      });
-      setBannerFile(file);
-    }
-  }
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (!form.storeName.trim()) {
-      setActiveTab("store");
-      setMessage("Please enter your store name.");
-      return;
-    }
-
-    if (!form.email.trim()) {
-      setActiveTab("general");
-      setMessage("Please enter your business email.");
-      return;
-    }
-
-    setMessage(
-      "Profile validated successfully. Backend integration is required to save permanently."
-    );
-  }
-
-  function handleDocuments(files: FileList | null) {
-    if (!files) return;
-
+  function handlePhotoFiles(files: FileList | File[]) {
     const selected = Array.from(files);
+    if (!selected.length) return;
 
     const valid = selected.filter(
-      (file) =>
-        file.size <= 10 * 1024 * 1024 &&
-        /\.(pdf|jpg|jpeg|png)$/i.test(file.name)
+      (file) => file.type.startsWith("image/") && file.size <= maxPhotoBytes,
     );
+    const skipped = selected.length - valid.length;
 
-    setDocuments((previous) => [...previous, ...valid]);
-    setMessage("");
+    if (!valid.length) {
+      setPhotoFeedback(
+        selected.some((file) => file.size > maxPhotoBytes)
+          ? "Each photo must be 5 MB or smaller."
+          : "Please select valid image files.",
+      );
+      return;
+    }
+
+    const added = valid.map((file, index) => {
+      const url = URL.createObjectURL(file);
+      photoUrls.current.add(url);
+      const filename = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]+/g, " ");
+      const caption = photoCaption.trim();
+      return {
+        id: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+        caption: caption ? (valid.length > 1 ? `${caption} (${index + 1})` : caption) : filename || "Seller Photo",
+        url,
+      };
+    });
+
+    setPhotos((current) => [...current, ...added]);
+    setPhotoCaption("");
+    setPhotoFeedback(
+      skipped
+        ? `Added ${valid.length} photo(s); skipped ${skipped} invalid or over-size file(s).`
+        : `Added ${valid.length} photo(s) to your profile.`,
+    );
+    setToast(valid.length === 1 ? "Photo uploaded" : `${valid.length} photos uploaded`);
+    if (photoInput.current) photoInput.current.value = "";
   }
 
+  function handlePhotoDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    handlePhotoFiles(event.dataTransfer.files);
+  }
+
+  function removePhoto(photo: SellerPhoto) {
+    URL.revokeObjectURL(photo.url);
+    photoUrls.current.delete(photo.url);
+    setPhotos((current) => current.filter((item) => item.id !== photo.id));
+    setToast("Photo removed");
+  }
+
+  function addVideo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const id = getYouTubeId(videoUrl);
+    if (!id) {
+      setVideoFeedback("Enter a valid YouTube URL or 11-character video ID.");
+      return;
+    }
+
+    setVideos((current) => [
+      ...current,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        title: videoTitle.trim() || "Seller Showcase Video",
+        videoId: id,
+      },
+    ]);
+    setVideoTitle("");
+    setVideoUrl("");
+    setVideoFeedback("");
+    setToast("YouTube video added");
+  }
+
+  function submitBuyerRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const amount = Number(budget);
+    if (!buyer.trim() || !requestDetails.trim() || !Number.isFinite(amount) || amount < 1) {
+      return;
+    }
+
+    setRequests((current) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        buyer: buyer.trim(),
+        details: requestDetails.trim(),
+        amount,
+        status: "New",
+      },
+      ...current,
+    ]);
+    setBuyer("");
+    setRequestDetails("");
+    setBudget("1500");
+    setModalOpen(false);
+    setToast("Quote / order request submitted");
+  }
+
+  const categories = profile.categories
+    .split(",")
+    .map((category) => category.trim())
+    .filter(Boolean);
+
   return (
-    <main className="seller-page">
+    <main className="seller-page seller-dashboard">
       <div className="seller-heading">
         <div>
-          <span className="eyebrow">SELLER CENTER / ACCOUNT</span>
-          <h1>Seller Profile</h1>
-          <p>
-            Manage your business identity and marketplace presence.
-          </p>
+          <span className="eyebrow">SELLER CENTER / PROFILE</span>
+          <h1>Seller Profile Dashboard</h1>
+          <p>Manage your public profile and buyer quote requests.</p>
         </div>
-
-        <span className="verification-badge">
-          <ShieldCheck size={16} />
-          Verification Pending
-        </span>
+        <button
+          className="save-profile"
+          type="button"
+          onClick={() =>
+            setToast("Preview updated. Connect a backend to save permanently.")
+          }
+        >
+          <Check size={16} />
+          Save Seller Profile
+        </button>
       </div>
 
-      <section className="seller-overview">
-        <div className="store-avatar">
-          {logoPreview ? (
-            <img src={logoPreview} alt="Store logo preview" />
-          ) : (
-            <Store size={32} />
-          )}
-        </div>
-
-        <div className="store-summary">
-          <span className="eyebrow">YOUR STORE</span>
-          <h2>{form.storeName || "Your Store Name"}</h2>
-          <p>{form.email || "seller@example.com"}</p>
-          <span className="seller-id">
-            SELLER ID: NOT ASSIGNED
-          </span>
-        </div>
-
-        <span className="seller-status">NEW SELLER</span>
-      </section>
-
-      <div className="seller-management">
-        <aside className="seller-navigation">
-          <div className="seller-nav-heading">
-            <span>ACCOUNT SETTINGS</span>
-          </div>
-
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                className={`seller-nav-item ${
-                  activeTab === tab.id ? "selected" : ""
-                }`}
-                onClick={() => {
-                  setActiveTab(tab.id);
-                  setMessage("");
-                }}
-              >
-                <Icon size={18} />
-                <span>{tab.label}</span>
-                <ChevronRight size={15} />
-              </button>
-            );
-          })}
-        </aside>
-
-        <form className="seller-form" onSubmit={handleSubmit}>
-          {activeTab === "general" && (
-            <>
-              <SectionHeading
-                title="General Profile"
-                description="Your primary seller account information."
-              />
-
-              <div className="form-grid">
-                <Field label="Business Email" required>
-                  <input
-                    type="email"
-                    value={form.email}
-                    onChange={(e) =>
-                      updateField("email", e.target.value)
-                    }
-                    placeholder="business@example.com"
-                    required
-                  />
-                </Field>
-
-                <Field label="Contact Phone">
-                  <input
-                    type="tel"
-                    value={form.phone}
-                    onChange={(e) =>
-                      updateField("phone", e.target.value)
-                    }
-                    placeholder="+1 000 000 0000"
-                  />
-                </Field>
-
-                <Field label="Business Website">
-                  <input
-                    type="url"
-                    value={form.website}
-                    onChange={(e) =>
-                      updateField("website", e.target.value)
-                    }
-                    placeholder="https://example.com"
-                  />
-                </Field>
+      <div className="seller-dashboard-grid">
+        <div className="seller-dashboard-main">
+          <section className="dashboard-card">
+            <div className="dashboard-card-heading">
+              <div>
+                <span className="eyebrow">STEP 1</span>
+                <h2>Seller Profile Editor</h2>
+                <p>Set up your profile, upload photos and add YouTube videos.</p>
               </div>
-            </>
-          )}
+              <span className="dashboard-plan-pill">Seller Profile Subscription</span>
+            </div>
 
-          {activeTab === "store" && (
-            <>
-              <SectionHeading
-                title="Store Identity"
-                description="Customize how customers recognize your store."
-              />
-
-              <Field label="Store Logo">
-                <label className="upload-box logo-upload">
-                  {logoPreview ? (
-                    <img src={logoPreview} alt="Logo preview" />
-                  ) : (
-                    <Camera size={28} />
-                  )}
-                  <span>
-                    <strong>Upload Store Logo</strong>
-                    <small>PNG, JPG or WebP · Maximum 5 MB</small>
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    onChange={(e) =>
-                      handleImage(e.target.files?.[0], "logo")
-                    }
-                    hidden
-                  />
-                </label>
-              </Field>
-
-              <Field label="Store Banner">
-                <label className="upload-box banner-upload">
-                  {bannerPreview ? (
-                    <img src={bannerPreview} alt="Banner preview" />
-                  ) : (
-                    <Upload size={25} />
-                  )}
-                  <span>
-                    <strong>Upload Store Banner</strong>
-                    <small>Recommended 1600 × 500 pixels</small>
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp"
-                    onChange={(e) =>
-                      handleImage(e.target.files?.[0], "banner")
-                    }
-                    hidden
-                  />
-                </label>
-              </Field>
-
-              <div className="form-grid">
-                <Field label="Store Name" required>
-                  <input
-                    value={form.storeName}
-                    onChange={(e) =>
-                      updateField("storeName", e.target.value)
-                    }
-                    placeholder="Enter your store name"
-                    required
-                  />
-                </Field>
-
-                <Field label="Store URL Slug" required>
-                  <input
-                    value={form.storeSlug}
-                    onChange={(e) =>
-                      updateField(
-                        "storeSlug",
-                        e.target.value
-                          .toLowerCase()
-                          .replace(/[^a-z0-9-]/g, "-")
-                      )
-                    }
-                    placeholder="your-store"
-                    required
-                  />
-                </Field>
-              </div>
-
-              <Field label="Store Description">
-                <textarea
-                  value={form.description}
-                  onChange={(e) =>
-                    updateField("description", e.target.value)
-                  }
-                  placeholder="Tell customers about your store..."
-                  rows={5}
+            <div className="form-grid dashboard-profile-fields">
+              <label className="profile-field">
+                <span>Seller Profile Name</span>
+                <input
+                  value={profile.name}
+                  onChange={(event) => updateProfile("name", event.target.value)}
+                  placeholder="Enter seller profile name"
                 />
-              </Field>
-            </>
-          )}
-
-          {activeTab === "business" && (
-            <>
-              <SectionHeading
-                title="Business Information"
-                description="Provide accurate legal business information."
-              />
-
-              <div className="form-grid">
-                <Field label="Legal Business Name" required>
-                  <input
-                    value={form.legalName}
-                    onChange={(e) =>
-                      updateField("legalName", e.target.value)
-                    }
-                    placeholder="Registered legal company name"
-                  />
-                </Field>
-
-                <Field label="Business Type">
-                  <select
-                    value={form.businessType}
-                    onChange={(e) =>
-                      updateField("businessType", e.target.value)
-                    }
-                  >
-                    <option value="">Select business type</option>
-                    <option value="individual">Individual</option>
-                    <option value="sole_proprietorship">
-                      Sole Proprietorship
-                    </option>
-                    <option value="partnership">Partnership</option>
-                    <option value="company">Corporation / Company</option>
-                    <option value="other">Other</option>
-                  </select>
-                </Field>
-
-                <Field label="Registration Number">
-                  <input
-                    value={form.registrationNumber}
-                    onChange={(e) =>
-                      updateField(
-                        "registrationNumber",
-                        e.target.value
-                      )
-                    }
-                    placeholder="Business registration number"
-                  />
-                </Field>
-              </div>
-
-              <div className="notice-panel">
-                <ShieldCheck size={20} />
-                <p>
-                  Legal business information may be used for
-                  verification and regulatory compliance.
-                  Only submit accurate information.
-                </p>
-              </div>
-            </>
-          )}
-
-          {activeTab === "address" && (
-            <>
-              <SectionHeading
-                title="Business Address"
-                description="Your registered business location."
-              />
-
-              <div className="form-grid">
-                <Field label="Country Code" required>
-                  <input
-                    value={form.country}
-                    onChange={(e) =>
-                      updateField(
-                        "country",
-                        e.target.value.toUpperCase().slice(0, 2)
-                      )
-                    }
-                    placeholder="US"
-                    maxLength={2}
-                  />
-                </Field>
-
-                <Field label="City">
-                  <input
-                    value={form.city}
-                    onChange={(e) =>
-                      updateField("city", e.target.value)
-                    }
-                    placeholder="City"
-                  />
-                </Field>
-
-                <Field label="Postal Code">
-                  <input
-                    value={form.postalCode}
-                    onChange={(e) =>
-                      updateField("postalCode", e.target.value)
-                    }
-                    placeholder="Postal code"
-                  />
-                </Field>
-              </div>
-
-              <Field label="Full Business Address">
-                <textarea
-                  value={form.address}
-                  onChange={(e) =>
-                    updateField("address", e.target.value)
-                  }
-                  placeholder="Street, building, district..."
-                  rows={4}
+              </label>
+              <label className="profile-field">
+                <span>Location / Coverage Area</span>
+                <input
+                  value={profile.location}
+                  onChange={(event) => updateProfile("location", event.target.value)}
+                  placeholder="e.g., Yangon · Metro & Industrial Zones"
                 />
-              </Field>
-            </>
-          )}
+              </label>
+              <label className="profile-field dashboard-field-wide">
+                <span>Category / Offerings</span>
+                <input
+                  value={profile.categories}
+                  onChange={(event) => updateProfile("categories", event.target.value)}
+                  placeholder="Separate offerings with commas"
+                />
+                <small>Separate categories or offerings with commas.</small>
+              </label>
+              <label className="profile-field dashboard-field-wide">
+                <span>Short Summary</span>
+                <textarea
+                  rows={3}
+                  value={profile.summary}
+                  onChange={(event) => updateProfile("summary", event.target.value)}
+                  placeholder="Describe what you deliver and why buyers should contact you..."
+                />
+              </label>
+            </div>
 
-          {activeTab === "verification" && (
-            <>
-              <SectionHeading
-                title="Verification Center"
-                description="Prepare the documents required to verify your seller account."
-              />
-
-              <div className="verification-summary">
-                <ShieldCheck size={32} />
+            <div className="dashboard-subsection">
+              <div className="dashboard-subsection-heading">
                 <div>
-                  <strong>Verification not submitted</strong>
-                  <p>
-                    Your account is awaiting business verification.
-                  </p>
+                  <strong>Direct Photo Upload</strong>
+                  <p>Choose photos from your device or drag and drop them here.</p>
                 </div>
+                <ImagePlus size={19} />
               </div>
-
-              <Field label="Verification Document">
-                <label className="upload-box document-upload">
-                  <FileText size={28} />
-                  <span>
-                    <strong>Select verification documents</strong>
-                    <small>PDF, JPG or PNG · Maximum 10 MB per file</small>
-                  </span>
+              <div className="photo-upload-row">
+                <input
+                  value={photoCaption}
+                  onChange={(event) => setPhotoCaption(event.target.value)}
+                  placeholder="Optional photo caption"
+                  aria-label="Optional photo caption"
+                />
+                <label
+                  className={`photo-dropzone ${isDragging ? "is-dragging" : ""}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handlePhotoDrop}
+                >
+                  <Upload size={19} />
+                  <span>Choose Photos or Drag &amp; Drop</span>
+                  <small>JPG, PNG, WebP · Up to 5 MB each</small>
                   <input
+                    ref={photoInput}
                     type="file"
+                    accept="image/*"
                     multiple
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={(e) =>
-                      handleDocuments(e.target.files)
-                    }
-                    hidden
+                    onChange={(event) => {
+                      if (event.target.files) handlePhotoFiles(event.target.files);
+                    }}
                   />
                 </label>
-              </Field>
-
-              {documents.length > 0 && (
-                <div className="document-list">
-                  {documents.map((file, index) => (
-                    <div className="document-item" key={`${file.name}-${index}`}>
-                      <FileText size={18} />
-                      <span>{file.name}</span>
+              </div>
+              {photoFeedback && (
+                <p className="dashboard-feedback" role="status">{photoFeedback}</p>
+              )}
+              <div className="dashboard-media-list">
+                {photos.length ? (
+                  photos.map((photo) => (
+                    <div className="dashboard-media-item" key={photo.id}>
+                      <img src={photo.url} alt={photo.caption} />
+                      <div>
+                        <strong>{photo.caption}</strong>
+                        <small>Uploaded file · Ready for preview</small>
+                      </div>
                       <button
                         type="button"
-                        onClick={() =>
-                          setDocuments((previous) =>
-                            previous.filter((_, i) => i !== index)
-                          )
-                        }
+                        aria-label={`Remove ${photo.caption}`}
+                        onClick={() => removePhoto(photo)}
                       >
-                        Remove
+                        <Trash2 size={16} />
                       </button>
                     </div>
-                  ))}
-                </div>
-              )}
-
-              <div className="notice-panel">
-                <ShieldCheck size={20} />
-                <p>
-                  Document selection is currently local only.
-                  Secure upload, document encryption and
-                  verification review will be connected to
-                  the backend later.
-                </p>
+                  ))
+                ) : (
+                  <p className="dashboard-empty">No photos uploaded yet.</p>
+                )}
               </div>
-            </>
-          )}
-
-          {activeTab === "localization" && (
-            <>
-              <SectionHeading
-                title="Store Localization"
-                description="Set your preferred language and default currency."
-              />
-
-              <div className="form-grid">
-                <Field label="Preferred Language">
-                  <select
-                    value={form.language}
-                    onChange={(e) =>
-                      updateField("language", e.target.value)
-                    }
-                  >
-                    <option>English</option>
-                    <option>Myanmar</option>
-                    <option>Chinese</option>
-                    <option>Japanese</option>
-                    <option>Thai</option>
-                  </select>
-                </Field>
-
-                <Field label="Default Currency">
-                  <select
-                    value={form.currency}
-                    onChange={(e) =>
-                      updateField("currency", e.target.value)
-                    }
-                  >
-                    <option value="USD">USD - US Dollar</option>
-                    <option value="EUR">EUR - Euro</option>
-                    <option value="GBP">GBP - Pound Sterling</option>
-                    <option value="AUD">AUD - Australian Dollar</option>
-                    <option value="SGD">SGD - Singapore Dollar</option>
-                    <option value="MMK">MMK - Myanmar Kyat</option>
-                  </select>
-                </Field>
-              </div>
-
-              <div className="notice-panel">
-                <Globe size={20} />
-                <p>
-                  The seller's default currency is not necessarily
-                  the currency displayed to every customer.
-                  Customer display currencies will be handled
-                  by the pricing engine.
-                </p>
-              </div>
-            </>
-          )}
-
-          {message && (
-            <div className="form-message" role="status">
-              {message}
             </div>
-          )}
 
-          <div className="form-actions">
-            <span>Changes are not saved to the server yet.</span>
-            <button className="save-profile" type="submit">
-              <Save size={17} />
-              Validate Profile
-            </button>
-          </div>
-        </form>
+            <div className="dashboard-subsection">
+              <div className="dashboard-subsection-heading">
+                <div>
+                  <strong>YouTube Video Links</strong>
+                  <p>Paste a watch link, short link, Shorts URL or video ID.</p>
+                </div>
+                <Play size={18} />
+              </div>
+              <form className="video-add-form" onSubmit={addVideo}>
+                <input
+                  value={videoTitle}
+                  onChange={(event) => setVideoTitle(event.target.value)}
+                  placeholder="Video title (optional)"
+                  aria-label="Video title"
+                />
+                <input
+                  value={videoUrl}
+                  onChange={(event) => setVideoUrl(event.target.value)}
+                  placeholder="YouTube URL or 11-character ID"
+                  aria-label="YouTube URL or video ID"
+                  required
+                />
+                <button className="save-profile" type="submit">
+                  <Plus size={16} />
+                  Add Video
+                </button>
+              </form>
+              {videoFeedback && (
+                <p className="dashboard-feedback dashboard-feedback-error" role="alert">
+                  {videoFeedback}
+                </p>
+              )}
+              <div className="dashboard-media-list">
+                {videos.length ? (
+                  videos.map((video) => (
+                    <div className="dashboard-media-item" key={video.id}>
+                      <div className="video-list-icon"><Play size={15} /></div>
+                      <div>
+                        <strong>{video.title}</strong>
+                        <small>youtube.com/watch?v={video.videoId}</small>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${video.title}`}
+                        onClick={() => {
+                          setVideos((current) =>
+                            current.filter((item) => item.id !== video.id),
+                          );
+                          setToast("Video removed");
+                        }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <p className="dashboard-empty">No YouTube links added yet.</p>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="dashboard-card">
+            <div className="dashboard-card-heading">
+              <div>
+                <span className="eyebrow">STEP 2</span>
+                <h2>Seller Profile Subscription</h2>
+                <p>One simple seller profile subscription, with no transaction commission.</p>
+              </div>
+            </div>
+            <div className="subscription-summary">
+              <ShieldCheck size={22} />
+              <div>
+                <strong>Seller Profile</strong>
+                <p>Monthly pricing is confirmed directly with NEXORA.</p>
+              </div>
+            </div>
+          </section>
+
+          <section className="dashboard-card">
+            <div className="dashboard-card-heading">
+              <div>
+                <span className="eyebrow">STEP 3</span>
+                <h2>Quotes &amp; Orders List</h2>
+                <p>Review and update quote or order requests from buyers.</p>
+              </div>
+            </div>
+            <div className="request-list">
+              {requests.length ? (
+                requests.map((request) => (
+                  <article className="request-item" key={request.id}>
+                    <div className="request-details">
+                      <div>
+                        <strong>{request.buyer}</strong>
+                        <b>{formatMoney(request.amount)}</b>
+                      </div>
+                      <p>{request.details}</p>
+                    </div>
+                    <div className="request-statuses" aria-label="Request status">
+                      {requestStatuses.map((status) => (
+                        <button
+                          key={status}
+                          type="button"
+                          className={`request-status ${status.toLowerCase()} ${
+                            request.status === status ? "active" : ""
+                          }`}
+                          aria-pressed={request.status === status}
+                          onClick={() =>
+                            setRequests((current) =>
+                              current.map((item) =>
+                                item.id === request.id ? { ...item, status } : item,
+                              ),
+                            )
+                          }
+                        >
+                          {status}
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <p className="dashboard-empty">
+                  No buyer inquiries yet. New requests submitted through your public profile will appear here.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <aside className="seller-preview" id="live-seller-profile-preview">
+          <section className="preview-card">
+            <div className="preview-card-heading">
+              <div>
+                <span className="eyebrow">LIVE SELLER PROFILE PREVIEW</span>
+                <h2>Public Seller Profile</h2>
+              </div>
+              <span>Seller Profile</span>
+            </div>
+            <div className="preview-card-content">
+              <div className="preview-details">
+                <h3>{profile.name.trim() || "Seller Profile Name"}</h3>
+                <p className="preview-location">
+                  <MapPin size={14} />
+                  {profile.location.trim() || "Location / Coverage Area"}
+                </p>
+                <div className="preview-categories">
+                  {categories.length ? (
+                    categories.map((category, index) => (
+                      <span key={`${category}-${index}`}>{category}</span>
+                    ))
+                  ) : (
+                    <small>No categories listed</small>
+                  )}
+                </div>
+                <p className="preview-summary">
+                  {profile.summary.trim() || "Add a short summary to introduce your business to buyers."}
+                </p>
+              </div>
+              <button
+                className="preview-quote-button"
+                type="button"
+                onClick={() => setModalOpen(true)}
+              >
+                Request Quote / Order
+              </button>
+
+              <div className="preview-gallery">
+                <div className="preview-section-title">
+                  <strong>Photo Gallery</strong>
+                  <span>{photos.length} {photos.length === 1 ? "photo" : "photos"}</span>
+                </div>
+                {photos.length ? (
+                  <div className="preview-photo-grid">
+                    {photos.map((photo) => (
+                      <figure key={photo.id}>
+                        <img src={photo.url} alt={photo.caption} />
+                        <figcaption>{photo.caption}</figcaption>
+                      </figure>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="dashboard-empty">No photos in the profile gallery yet.</p>
+                )}
+              </div>
+
+              <div className="preview-gallery">
+                <div className="preview-section-title">
+                  <strong>YouTube Video Previews</strong>
+                  <span>{videos.length} {videos.length === 1 ? "video" : "videos"}</span>
+                </div>
+                {videos.length ? (
+                  <div className="preview-video-list">
+                    {videos.map((video) => (
+                      <article key={video.id}>
+                        <div className="preview-video-frame">
+                          <iframe
+                            src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.videoId)}`}
+                            title={video.title}
+                            loading="lazy"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        </div>
+                        <a
+                          href={`https://www.youtube.com/watch?v=${encodeURIComponent(video.videoId)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {video.title}
+                        </a>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="dashboard-empty">No YouTube video previews yet.</p>
+                )}
+              </div>
+            </div>
+          </section>
+        </aside>
       </div>
+
+      <p className="dashboard-notice">
+        Profile edits, photos, videos and inquiries are held in this browser session only. Permanent storage requires a connected backend.
+      </p>
+
+      {modalOpen && (
+        <div
+          className="quote-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setModalOpen(false);
+          }}
+        >
+          <section
+            className="quote-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="quote-modal-title"
+          >
+            <div className="quote-modal-heading">
+              <div>
+                <span className="eyebrow">BUYER INQUIRY</span>
+                <h2 id="quote-modal-title">Request Quote / Order</h2>
+                <p>Sending to: {profile.name.trim() || "Seller Profile"}</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close dialog"
+                onClick={() => setModalOpen(false)}
+              >
+                <X size={19} />
+              </button>
+            </div>
+            <form onSubmit={submitBuyerRequest}>
+              <label className="profile-field">
+                <span>Buyer Name or Company</span>
+                <input
+                  autoFocus
+                  value={buyer}
+                  onChange={(event) => setBuyer(event.target.value)}
+                  placeholder="e.g., Yangon Logistics Hub"
+                  required
+                />
+              </label>
+              <label className="profile-field">
+                <span>Quote or Order Details</span>
+                <input
+                  value={requestDetails}
+                  onChange={(event) => setRequestDetails(event.target.value)}
+                  placeholder="Describe your request"
+                  required
+                />
+              </label>
+              <label className="profile-field">
+                <span>Estimated Value (USD)</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={budget}
+                  onChange={(event) => setBudget(event.target.value)}
+                  required
+                />
+              </label>
+              <div className="quote-modal-actions">
+                <button
+                  type="button"
+                  className="cancel-quote"
+                  onClick={() => setModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button className="save-profile" type="submit">Submit Request</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {toast && (
+        <div className="dashboard-toast" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
     </main>
-  );
-}
-
-function SectionHeading({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="section-heading">
-      <h3>{title}</h3>
-      <p>{description}</p>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  required,
-  children,
-}: {
-  label: string;
-  required?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <label className="profile-field">
-      <span>
-        {label}
-        {required && <b className="required-mark"> *</b>}
-      </span>
-      {children}
-    </label>
   );
 }
